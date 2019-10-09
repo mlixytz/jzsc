@@ -53,7 +53,7 @@ class JZSC:
                             'apt_code': apt_code[0],
                             'qy_region': region[0],
                         }
-                        response = requests.post(self.url, headers=self.headers, data=data)
+                        response = requests.post(self.url, headers=self.headers, data=data, proxies={"http": "http://{}".format(self.get_proxy())})
                         if not response.ok:
                             print(f'region：{region[0]}，apt_code：{apt_code[0]}，page：{i+1} 未获取到')
                             continue
@@ -79,9 +79,10 @@ class JZSC:
         return list(zip(codes, names, entities, regions))
 
     def get_proxy(self):
-        return requests.get("http://127.0.0.1:5010/get/").content
+        content = requests.get("http://127.0.0.1:5010/get/").content
+        return json.loads(content)['proxy']
 
 jzsc = JZSC()
-# jzsc.fetch()
+jzsc.fetch()
 # jzsc.get_api_list()
-print(jzsc.get_proxy())
+# print(jzsc.get_proxy())
