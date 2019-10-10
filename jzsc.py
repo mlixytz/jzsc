@@ -45,25 +45,85 @@ class JZSC:
             for region in regions:
                 print(f'---------------------正在处理：{region[1]} 地区---------------------')
                 for apt_code in apt_lists:
-                    print(f'正在处理{region[1]}资质为：{apt_code[1]}的数据')
-                    time.sleep(.5)
+                    print(f'正在处理{region[0]}{region[1]}资质为：{apt_code[0]}{apt_code[1]}的数据')
                     for i in range(30):
                         data = {
                             '$pg': i+1,
                             'apt_code': apt_code[0],
                             'qy_region': region[0],
                         }
-                        response = requests.post(self.url, headers=self.headers, data=data, proxies={"http": "http://{}".format(self.get_proxy())})
-                        if not response.ok:
-                            print(f'region：{region[0]}，apt_code：{apt_code[0]}，page：{i+1} 未获取到')
-                            continue
-                        result = self.parse_jzsc(response.text)
+                        
+                        content = ''
+                        while True:
+                            proxy = self.get_proxy()
+                            try:
+                                response = requests.post(self.url, headers=self.headers, data=data, proxies={"http": f'http://{proxy}'}, timeout=15)
+                            except requests.RequestException:
+                                try:
+                                    response = requests.post(self.url, headers=self.headers, data=data, proxies={"https": f'https://{proxy}'}, timeout=15)
+                                except requests.RequestException as e:
+                                    self.delete_proxy(proxy)
+                                    print(f'代理{proxy}不可用, 原因：', e)
+                                    continue
+                            if not response.ok:
+                                print(f'代理{proxy}不可用，状态码：', response.status_code)
+                                self.delete_proxy(proxy)
+                                continue
+                            content = response.text
+                            break
+                        result = self.parse_jzsc(content)
+                        for item in result:
+                            print('写入数据', item)
+                            writer.writerow(item)
+
                         if len(result) < 15:
                             break
-                        for item in result:
-                            writer.writerow(item)
-                        time.sleep(.5)
 
+    def downloadPages(self):
+        apt_lists = []
+        with open('apt.json', 'r') as fp:
+            apt_lists = json.load(fp)
+
+        regions = []
+        with open('region.json', 'r') as fp:
+            regions = json.load(fp)
+
+        for region in regions:
+            print(f"-----------------------------------------------正在下载{region[1]}（{region[0]}）的数据-----------------------------------------------")
+            for apt_code in apt_lists:
+                print(f"正在下载资质为：{apt_code[1]}（{apt_code[0]}）的数据...")
+                for i in range(30):
+                        data = {
+                            '$pg': i+1,
+                            'apt_code': apt_code[0],
+                            'qy_region': region[0],
+                        }
+
+                        content, has_next = self.get_content(data)
+                        with open(f'html/{region[1]}_{apt_code[1]}_{i+1}.html', 'w+') as fp:
+                            fp.write(content)
+                        
+                        if not has_next:
+                            break
+
+    def get_content(self, data):
+        while True:
+            proxy = self.get_proxy()
+            try:
+                response = requests.post(self.url, headers=self.headers, data=data, proxies={"http": f'http://{proxy}'}, timeout=15)
+            except requests.RequestException:
+                try:
+                    response = requests.post(self.url, headers=self.headers, data=data, proxies={"https": f'https://{proxy}'}, timeout=15)
+                except requests.RequestException as e:
+                    self.delete_proxy(proxy)
+                    # print(f'代理{proxy}不可用, 原因：', e)
+                    continue
+            if not response.ok:
+                # print(f'代理{proxy}不可用，状态码：', response.status_code)
+                self.delete_proxy(proxy)
+                continue
+            content = response.text
+            return content, "暂未查询到已登记入库信息" not in content
 
     def parse_jzsc(self, text):
         html = etree.HTML(text)
@@ -81,8 +141,12 @@ class JZSC:
     def get_proxy(self):
         content = requests.get("http://127.0.0.1:5010/get/").content
         return json.loads(content)['proxy']
+    
+    def delete_proxy(self, proxy):
+        requests.get(f'http://127.0.0.1:5010/delete/?proxy={proxy}')
 
 jzsc = JZSC()
-jzsc.fetch()
+jzsc.downloadPages()
+
 # jzsc.get_api_list()
 # print(jzsc.get_proxy())
