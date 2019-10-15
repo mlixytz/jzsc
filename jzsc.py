@@ -1,3 +1,4 @@
+import asyncio
 import csv
 import json
 import re
@@ -79,7 +80,7 @@ class JZSC:
                         if len(result) < 15:
                             break
 
-    def downloadPages(self):
+    async def downloadPages(self):
         apt_lists = []
         with open('apt.json', 'r') as fp:
             apt_lists = json.load(fp)
@@ -88,24 +89,17 @@ class JZSC:
         with open('region.json', 'r') as fp:
             regions = json.load(fp)
 
+        tasks = []
         for region in regions:
-            print(f"-----------------------------------------------正在下载{region[1]}（{region[0]}）的数据-----------------------------------------------")
+            print(f"正在下载{region[1]}（{region[0]}）的数据")
             for apt_code in apt_lists:
-                print(f"正在下载资质为：{apt_code[1]}（{apt_code[0]}）的数据...")
-                for i in range(30):
-                        data = {
-                            '$pg': i+1,
-                            'apt_code': apt_code[0],
-                            'qy_region': region[0],
-                        }
+                tasks.append(asyncio.create_task(self.save_page(apt_code, region)))
 
-                        content, has_next = self.get_content(data)
-                        with open(f'html/{region[1]}_{apt_code[1]}_{i+1}.html', 'w+') as fp:
-                            fp.write(content)
-                        
-                        if not has_next:
-                            break
-
+        for n, task in enumerate(tasks):
+            if not n and not n % 610:
+                await asyncio.sleep(10)
+            await task
+            
     def get_content(self, data):
         while True:
             proxy = self.get_proxy()
@@ -116,14 +110,27 @@ class JZSC:
                     response = requests.post(self.url, headers=self.headers, data=data, proxies={"https": f'https://{proxy}'}, timeout=15)
                 except requests.RequestException as e:
                     self.delete_proxy(proxy)
-                    # print(f'代理{proxy}不可用, 原因：', e)
                     continue
             if not response.ok:
-                # print(f'代理{proxy}不可用，状态码：', response.status_code)
                 self.delete_proxy(proxy)
                 continue
             content = response.text
             return content, "暂未查询到已登记入库信息" not in content
+
+    async def save_page(self, apt_code, region):
+        for i in range(30):
+            data = {
+                '$pg': i+1,
+                'apt_code': apt_code[0],
+                'qy_region': region[0],
+            }
+            print(f'正在处理地区为{region[1]}，资质为{apt_code[1]}，第{i+1}页的数据')
+            content, has_next = self.get_content(data)
+            with open(f'html/{region[1]}_{apt_code[1]}_{i+1}.html', 'w+') as fp:
+                fp.write(content)
+            
+            if not has_next:
+                return
 
     def parse_jzsc(self, text):
         html = etree.HTML(text)
@@ -146,7 +153,7 @@ class JZSC:
         requests.get(f'http://127.0.0.1:5010/delete/?proxy={proxy}')
 
 jzsc = JZSC()
-jzsc.downloadPages()
+asyncio.run(jzsc.downloadPages())
 
 # jzsc.get_api_list()
 # print(jzsc.get_proxy())
