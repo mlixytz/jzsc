@@ -6,17 +6,50 @@ import requests
 import time
 
 from lxml import etree
+from decrypt import AESDecrypt
 
 
 class JZSC:
-    url = 'http://jzsc.mohurd.gov.cn/dataservice/query/comp/list'
-    apt_url = "http://jzsc.mohurd.gov.cn/asite/qualapt/aptData?apt_type="
+    url = 'http://jzsc.mohurd.gov.cn/api/webApi/dataservice/query/comp/list?qy_region=878286868686&apt_code=D101T&qy_type=&pg=0&pgsz=15'
+    apt_url = "http://jzsc.mohurd.gov.cn/api/webApi/asite/qualapt/aptData"
+    region_url = "http://jzsc.mohurd.gov.cn/api/webApi/asite/region/index"
     headers = {
         'Content-Type': 'application/x-www-form-urlencoded',
         'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_14_6) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/77.0.3865.90 Safari/537.36'
     }
 
-    apt_pattern = re.compile('<td.*?apt_code":"(.*?)".*?apt_scope":"(.*?)".*?</td>')
+    def get_region_list(self):
+        """ 获取地区信息 
+        
+        查询地区接口获取全部地区信息，返回值需解密
+
+        Returns: 
+            返回地区信息列表，地区信息用元组表示：(地区id, 地区名称)
+            例如：
+                [('FDFDFCFCFCFC', '北京'), ('FDFEFCFCFCFC', '天津')]
+        """
+        response = requests.get(self.region_url)
+        if not response.ok:
+            return []
+        data = AESDecrypt.decrypt(response.text)
+        return [(item['region_id'], item['region_name']) for item in json.loads(data)['data']['category']['provinces']]
+
+    def get_apt_list(self):
+        """ 获取资质信息 
+        
+        查询资质接口获取全部资质信息，返回值需解密
+
+        Returns: 
+            返回地区信息列表，地区信息用元组表示：(资质码, 资质名称)
+            例如：
+                [('A30904B', '工程设计核工业行业核设施退役及放射性三废处理处置工程专业乙级'), ('A31006B', '工程设计电子通信广电行业电子系统工程专业乙级')]
+        
+        """
+        response = requests.get(self.apt_url)
+        if not response.ok:
+            return []
+        data = AESDecrypt.decrypt(response.text)
+        return [(item['APT_CODE'], item['APT_CASENAME']) for item in json.loads(data)['data']['pageList']]
 
     def get_api_list(self):
         apt_list = []
@@ -153,7 +186,9 @@ class JZSC:
         requests.get(f'http://127.0.0.1:5010/delete/?proxy={proxy}')
 
 jzsc = JZSC()
-asyncio.run(jzsc.downloadPages())
+# asyncio.run(jzsc.downloadPages())
 
 # jzsc.get_api_list()
 # print(jzsc.get_proxy())
+# print(jzsc.get_region_list())
+print(len(jzsc.get_apt_list()))
