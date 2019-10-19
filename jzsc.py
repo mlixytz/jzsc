@@ -1,22 +1,30 @@
+import aiohttp
 import asyncio
 import csv
 import json
+import random
 import re
 import requests
 import time
 
-from lxml import etree
 from decrypt import AESDecrypt
 
 
 class JZSC:
-    url = 'http://jzsc.mohurd.gov.cn/api/webApi/dataservice/query/comp/list?qy_region=878286868686&apt_code=D101T&qy_type=&pg=0&pgsz=15'
+    """ 抓取全国建筑市场监管公共服务平台数据
+        
+        目前可抓取资质信息、地区信息、公司信息
+    """
+
+    url = 'http://jzsc.mohurd.gov.cn/api/webApi/dataservice/query/comp/list?pg=%d&pgsz=%d'
     apt_url = "http://jzsc.mohurd.gov.cn/api/webApi/asite/qualapt/aptData"
     region_url = "http://jzsc.mohurd.gov.cn/api/webApi/asite/region/index"
-    headers = {
-        'Content-Type': 'application/x-www-form-urlencoded',
-        'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_14_6) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/77.0.3865.90 Safari/537.36'
-    }
+    proxy_url = "http://127.0.0.1:5010"
+    file_header = ('企业名称', '企业法定代表人', '企业注册属地', '统一社会信用代码')
+
+    # 每页大小100条, 最多3838页
+    pgsz = 100
+    max_page = 3838
 
     def get_region_list(self):
         """ 获取地区信息 
@@ -51,144 +59,87 @@ class JZSC:
         data = AESDecrypt.decrypt(response.text)
         return [(item['APT_CODE'], item['APT_CASENAME']) for item in json.loads(data)['data']['pageList']]
 
-    def get_api_list(self):
-        apt_list = []
+    async def request(self, session, page):
+        """ 请求目标页面
         
-        for i in range(61):
-            response = requests.post(self.apt_url, headers=self.headers, data={'$pg': i+1})
-            if not response.ok:
-                print(f'第{i+1}页资质信息未拿到')
-                continue
-            apt_list.extend(self.apt_pattern.findall(response.text))
-            print(f'第{i+1}页资质信息已拿到')
-            time.sleep(1)
-        with open('apt.json', 'w', encoding='utf8') as fp:
-            json.dump(apt_list, fp)
+        真实发起请求，如果请求未成功则删除该代理，并重试，直到抓取到了正确的数据
 
-    def fetch(self):
-        apt_lists = []
-        with open('apt.json', 'r') as fp:
-            apt_lists = json.load(fp)
+        Args:
+            session: aiohttp.ClientSession() 实例，用来发起请求
+            page：要获取的页面
 
-        regions = []
-        with open('region.json', 'r') as fp:
-            regions = json.load(fp)
+        Returns:
+            返回响应中的加密字符串
 
-        with open('jzsc.csv', 'w+') as fp:
-            writer = csv.writer(fp)
-            for region in regions:
-                print(f'---------------------正在处理：{region[1]} 地区---------------------')
-                for apt_code in apt_lists:
-                    print(f'正在处理{region[0]}{region[1]}资质为：{apt_code[0]}{apt_code[1]}的数据')
-                    for i in range(30):
-                        data = {
-                            '$pg': i+1,
-                            'apt_code': apt_code[0],
-                            'qy_region': region[0],
-                        }
-                        
-                        content = ''
-                        while True:
-                            proxy = self.get_proxy()
-                            try:
-                                response = requests.post(self.url, headers=self.headers, data=data, proxies={"http": f'http://{proxy}'}, timeout=15)
-                            except requests.RequestException:
-                                try:
-                                    response = requests.post(self.url, headers=self.headers, data=data, proxies={"https": f'https://{proxy}'}, timeout=15)
-                                except requests.RequestException as e:
-                                    self.delete_proxy(proxy)
-                                    print(f'代理{proxy}不可用, 原因：', e)
-                                    continue
-                            if not response.ok:
-                                print(f'代理{proxy}不可用，状态码：', response.status_code)
-                                self.delete_proxy(proxy)
-                                continue
-                            content = response.text
-                            break
-                        result = self.parse_jzsc(content)
-                        for item in result:
-                            print('写入数据', item)
-                            writer.writerow(item)
-
-                        if len(result) < 15:
-                            break
-
-    async def downloadPages(self):
-        apt_lists = []
-        with open('apt.json', 'r') as fp:
-            apt_lists = json.load(fp)
-
-        regions = []
-        with open('region.json', 'r') as fp:
-            regions = json.load(fp)
-
-        tasks = []
-        for region in regions:
-            print(f"正在下载{region[1]}（{region[0]}）的数据")
-            for apt_code in apt_lists:
-                tasks.append(asyncio.create_task(self.save_page(apt_code, region)))
-
-        for n, task in enumerate(tasks):
-            if not n and not n % 610:
-                await asyncio.sleep(10)
-            await task
-            
-    def get_content(self, data):
+        """
+        # 随机睡10-3600秒不等，防止并发太高，对目标网站产生过大压力
+        await asyncio.sleep(random.randint(1, 3600))
         while True:
-            proxy = self.get_proxy()
+            proxy = await self.get_proxy(session)
             try:
-                response = requests.post(self.url, headers=self.headers, data=data, proxies={"http": f'http://{proxy}'}, timeout=15)
-            except requests.RequestException:
+                async with session.get(self.url % (page, self.pgsz), proxy=f'http://{proxy}', timeout=30) as response:
+                    if response.status == 200:
+                        print(f'第{page}页数据已抓取！')
+                        return await response.text()
+                    elif response.status == 401:
+                        await asyncio.sleep(10)
+                    else:
+                        await self.delete_proxy(session, proxy)
+            except Exception: # 代理异常
+                await self.delete_proxy(session, proxy)
+        
+    async def parse_data(self, enc_str):
+        """ 解析数据
+        
+        解密响应中的加密字符串，并解析成期望的数据格式
+
+        Args:
+            enc_str: 响应返回的加密字符串
+
+        Returns:
+            返回公司信息列表，公司信息格式：(企业名称, 企业法定代表人, 企业注册属地, 统一社会信用代码)
+            例如：
+                [('9XXX0702XXXE6U****','浙江**建筑工程有限公司','xxx','浙江省-金华市')]
+
+        """
+        data = json.loads(AESDecrypt.decrypt(enc_str))
+        items = data['data']['list']
+        ret = []
+        for item in items:
+            ret.append((item['QY_NAME'], item['QY_FR_NAME'], item['QY_REGION_NAME'], item['QY_ORG_CODE']))
+        return ret
+
+    async def fetch(self):
+        """ 抓取全部建筑企业信息
+        
+        按照每页100条，一直抓取到3838页，就可以抓取到全部数据，
+        异步抓取，并将返回值存储到指定csv文件中
+
+        """
+        async with aiohttp.ClientSession() as session:
+            tasks = []
+            for i in range(self.max_page):
+                tasks.append(asyncio.create_task(self.request(session, i+1)))
+            with open('jzsc.csv', 'w') as fp:
+                writer = csv.writer(fp)
+                writer.writerow(self.file_header)
+                for task in tasks:
+                    enc_str = await task
+                    items = await self.parse_data(enc_str)
+                    for item in items:
+                        writer.writerow(item)
+
+    async def get_proxy(self, session):
+        async with session.get(f"{self.proxy_url}/get") as response:
+            while True:
                 try:
-                    response = requests.post(self.url, headers=self.headers, data=data, proxies={"https": f'https://{proxy}'}, timeout=15)
-                except requests.RequestException as e:
-                    self.delete_proxy(proxy)
-                    continue
-            if not response.ok:
-                self.delete_proxy(proxy)
-                continue
-            content = response.text
-            return content, "暂未查询到已登记入库信息" not in content
-
-    async def save_page(self, apt_code, region):
-        for i in range(30):
-            data = {
-                '$pg': i+1,
-                'apt_code': apt_code[0],
-                'qy_region': region[0],
-            }
-            print(f'正在处理地区为{region[1]}，资质为{apt_code[1]}，第{i+1}页的数据')
-            content, has_next = self.get_content(data)
-            with open(f'html/{region[1]}_{apt_code[1]}_{i+1}.html', 'w+') as fp:
-                fp.write(content)
-            
-            if not has_next:
-                return
-
-    def parse_jzsc(self, text):
-        html = etree.HTML(text)
-        # 统一社会信用代码
-        codes = [item.strip() for item in html.xpath('//td[@data-header="统一社会信用代码"]/text()')]
-        # 企业名称
-        names = [item.strip() for item in html.xpath('//td[@data-header="企业名称"]/a/text()')]
-        # 法人
-        entities = [item.strip() for item in html.xpath('//td[@data-header="企业法定代表人"]/text()')]
-        # 归属地
-        regions = [item.strip() for item in html.xpath('//td[@data-header="企业注册属地"]/text()')]
-
-        return list(zip(codes, names, entities, regions))
-
-    def get_proxy(self):
-        content = requests.get("http://127.0.0.1:5010/get/").content
-        return json.loads(content)['proxy']
+                    return json.loads(await response.text())['proxy']
+                except KeyError: # 代理池没可用代理时，睡一分钟后重试
+                    await asyncio.sleep(60)
     
-    def delete_proxy(self, proxy):
-        requests.get(f'http://127.0.0.1:5010/delete/?proxy={proxy}')
+    async def delete_proxy(self, session, proxy):
+        async with session.get(f"{self.proxy_url}/delete?proxy={proxy}"): return
+
 
 jzsc = JZSC()
-# asyncio.run(jzsc.downloadPages())
-
-# jzsc.get_api_list()
-# print(jzsc.get_proxy())
-# print(jzsc.get_region_list())
-print(len(jzsc.get_apt_list()))
+asyncio.run(jzsc.fetch())
