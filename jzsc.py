@@ -22,9 +22,13 @@ class JZSC:
     proxy_url = "http://127.0.0.1:5010"
     file_header = ('企业名称', '企业法定代表人', '企业注册属地', '统一社会信用代码')
 
-    # 每页大小100条, 最多3838页
+    # 每页大小100条
     pgsz = 100
-    max_page = 3838
+
+    def __init__(self, start_page=1, end_page=3838):
+        """ 设置抓取的起始页和结束页 """
+        self.start_page = start_page
+        self.end_page = end_page
 
     def get_region_list(self):
         """ 获取地区信息 
@@ -72,17 +76,18 @@ class JZSC:
             返回响应中的加密字符串
 
         """
-        # 随机睡10-3600秒不等，防止并发太高，对目标网站产生过大压力
-        await asyncio.sleep(random.randint(1, 3600))
+        # 随机睡1-300秒不等，防止并发太高，对目标网站产生过大压力
+        await asyncio.sleep(random.randint(1, 60))
         while True:
             proxy = await self.get_proxy(session)
             try:
-                async with session.get(self.url % (page, self.pgsz), proxy=f'http://{proxy}', timeout=30) as response:
+                async with session.get(self.url % (page, self.pgsz), proxy=proxy, timeout=30) as response:
                     if response.status == 200:
                         print(f'第{page}页数据已抓取！')
-                        return await response.text()
+                        return (await response.text(), page)
                     elif response.status == 401:
-                        await asyncio.sleep(10)
+                        print(f'{page} 系统繁忙。。。')
+                        await asyncio.sleep(5)
                     else:
                         await self.delete_proxy(session, proxy)
             except Exception: # 代理异常
@@ -102,7 +107,10 @@ class JZSC:
                 [('9XXX0702XXXE6U****','浙江**建筑工程有限公司','xxx','浙江省-金华市')]
 
         """
-        data = json.loads(AESDecrypt.decrypt(enc_str))
+        try:
+            data = json.loads(AESDecrypt.decrypt(enc_str))
+        except ValueError:
+            return []
         items = data['data']['list']
         ret = []
         for item in items:
@@ -118,14 +126,16 @@ class JZSC:
         """
         async with aiohttp.ClientSession() as session:
             tasks = []
-            for i in range(self.max_page):
-                tasks.append(asyncio.create_task(self.request(session, i+1)))
-            with open('jzsc.csv', 'w') as fp:
+            for page in range(self.start_page, self.end_page+1):
+                tasks.append(asyncio.create_task(self.request(session, page)))
+            with open(f'data/jzsc_{self.start_page}_{self.end_page}.csv', 'w') as fp:
                 writer = csv.writer(fp)
                 writer.writerow(self.file_header)
                 for task in tasks:
-                    enc_str = await task
+                    enc_str, page = await task
                     items = await self.parse_data(enc_str)
+                    if not items: # 如果数据为空，说明抓取错误，则重新抓取
+                        tasks.append(asyncio.create_task(self.request(session, page)))
                     for item in items:
                         writer.writerow(item)
 
@@ -141,5 +151,11 @@ class JZSC:
         async with session.get(f"{self.proxy_url}/delete?proxy={proxy}"): return
 
 
-jzsc = JZSC()
-asyncio.run(jzsc.fetch())
+if __name__ == '__main__':
+    # 分批抓取，每次抓取100页
+    page = 1
+    while page < 3839:
+        jzsc = JZSC(page, page+99)
+        asyncio.run(jzsc.fetch())
+        page += 100
+        time.sleep(10)

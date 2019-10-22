@@ -4,7 +4,7 @@
 
 ## 依赖
 
-python 版本要求大于等于 3.7
+python 版本要求 >= 3.7
 
 安装python依赖：
 `pip install -r requirements.txt`
@@ -16,4 +16,3 @@ python 版本要求大于等于 3.7
 
 2. 执行抓取：
    `python decrypt.py`
-

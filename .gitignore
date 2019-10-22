@@ -2,4 +2,6 @@
 .DS_Store
 proxy_pool
 __pycache__
-jzsc.csv
+jzsc.xlsx
+data/
+
