@@ -15,4 +15,4 @@ python 版本要求 >= 3.7
    `./run_proxy.sh`
 
 2. 执行抓取：
-   `python decrypt.py`
+   `python jzsc.py`
