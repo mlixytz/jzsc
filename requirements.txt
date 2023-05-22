@@ -1,4 +1,4 @@
 aiohttp==3.6.2
 pycrypto==2.6.1
-requests==2.22.0
+requests==2.31.0
 xlsxwriter==1.2.2
